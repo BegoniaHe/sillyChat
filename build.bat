@@ -11,7 +11,7 @@ cd /d "%SCRIPT_DIR%"
 echo.
 echo ===========================================
 echo   Flutter 一键构建脚本
-echo   目标: Android APK Windows EXE
+echo   Android APK Windows EXE
 echo ===========================================
 echo.
 
