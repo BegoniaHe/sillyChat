@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_example/chat-app/providers/vault_setting_controller.dart';
 import 'package:flutter_example/chat-app/widgets/option_input.dart';
+import 'package:flutter_example/chat-app/utils/AIHandler.dart';
 import 'package:get/get.dart';
 import '../../models/api_model.dart';
 
@@ -18,6 +19,8 @@ class _ApiEditPageState extends State<ApiEditPage> {
   final VaultSettingController controller = Get.find();
 
   String modelName = "";
+  bool _isLoadingModels = false;
+  List<String> _availableModels = [];
 
   late TextEditingController _apiKeyController;
   //late TextEditingController _modelNameController;
@@ -37,6 +40,91 @@ class _ApiEditPageState extends State<ApiEditPage> {
         TextEditingController(text: widget.api?.displayName ?? '');
 
     _selectedProvider = widget.api?.provider ?? ServiceProvider.openai;
+    _availableModels = List.from(_selectedProvider.modelList);
+  }
+
+  /// 获取模型列表
+  Future<void> _fetchModelList() async {
+    if (_apiKeyController.text.isEmpty) {
+      Get.snackbar('错误', '请先填写API Key', 
+          snackPosition: SnackPosition.BOTTOM,
+          colorText: Colors.red);
+      return;
+    }
+
+    String url;
+    if (_selectedProvider.isCustom) {
+      if (_urlController.text.isEmpty) {
+        Get.snackbar('错误', '请先填写URL', 
+            snackPosition: SnackPosition.BOTTOM,
+            colorText: Colors.red);
+        return;
+      }
+      url = _urlController.text;
+    } else {
+      url = _selectedProvider.defaultUrl;
+    }
+
+    setState(() {
+      _isLoadingModels = true;
+    });
+
+    try {
+      final models = await Aihandler.fetchModelList(
+        url,
+        _apiKeyController.text,
+        _selectedProvider,
+        (isSuccess, message) {
+          if (!isSuccess) {
+            Get.snackbar('获取模型列表失败', message,
+                snackPosition: SnackPosition.BOTTOM,
+                colorText: Colors.red);
+          } else {
+            Get.snackbar('成功', message,
+                snackPosition: SnackPosition.BOTTOM,
+                colorText: Colors.green);
+          }
+        },
+      );
+
+      if (models.isNotEmpty) {
+        setState(() {
+          _availableModels = models;
+        });
+      }
+    } finally {
+      setState(() {
+        _isLoadingModels = false;
+      });
+    }
+  }
+
+  /// 获取当前可用的模型列表（预设 + 获取的）
+  List<String> _getCurrentModelList() {
+    final presetModels = _selectedProvider.modelList;
+    final allModels = <String>{...presetModels, ..._availableModels}.toList();
+    return allModels;
+  }
+
+  /// 当API Key和URL都填写完成时自动获取模型列表
+  void _autoFetchModelsIfReady() {
+    // 避免重复请求
+    if (_isLoadingModels) return;
+    
+    // 检查条件是否满足
+    bool canFetch = _apiKeyController.text.isNotEmpty;
+    if (_selectedProvider.isCustom) {
+      canFetch = canFetch && _urlController.text.isNotEmpty;
+    }
+    
+    if (canFetch) {
+      // 延迟一点时间，避免用户输入过程中频繁请求
+      Future.delayed(Duration(milliseconds: 1000), () {
+        if (mounted && !_isLoadingModels) {
+          _fetchModelList();
+        }
+      });
+    }
   }
 
   @override
@@ -111,6 +199,7 @@ class _ApiEditPageState extends State<ApiEditPage> {
                 if (value != null) {
                   setState(() {
                     _selectedProvider = value;
+                    _availableModels = List.from(_selectedProvider.modelList);
                   });
                 }
               },
@@ -129,10 +218,14 @@ class _ApiEditPageState extends State<ApiEditPage> {
                 }
                 return null;
               },
+              onChanged: (value) {
+                // API Key变化时，如果URL也已填写，则自动获取模型列表
+                _autoFetchModelsIfReady();
+              },
             ),
             const SizedBox(height: 16),
             CustomOptionInputWidget.fromStringOptions(
-              options: _selectedProvider.modelList,
+              options: _getCurrentModelList(),
               labelText: "模型名称",
               initialValue: modelName,
               onChanged: (value) {
@@ -143,6 +236,25 @@ class _ApiEditPageState extends State<ApiEditPage> {
                   _displayNameController.text = value;
                 }
               },
+            ),
+            const SizedBox(height: 8),
+            // 获取模型列表按钮
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isLoadingModels ? null : _fetchModelList,
+                    icon: _isLoadingModels 
+                        ? SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(Icons.refresh),
+                    label: Text(_isLoadingModels ? '获取中...' : '获取模型列表'),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             if (_selectedProvider.defaultUrl.isEmpty)
@@ -156,6 +268,10 @@ class _ApiEditPageState extends State<ApiEditPage> {
                     return '请输入 URL';
                   }
                   return null;
+                },
+                onChanged: (value) {
+                  // URL变化时，如果API Key也已填写，则自动获取模型列表
+                  _autoFetchModelsIfReady();
                 },
               ),
             Divider(),

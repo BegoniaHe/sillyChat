@@ -55,24 +55,94 @@ class Aihandler {
     }
   }
 
-  // 不好使
-  static Future<List<String>> fetchModelList(String url, String token,
-      void Function(bool isSuccess, String message) callback) async {
+  /// 获取模型列表
+  static Future<List<String>> fetchModelList(String baseUrl, String token,
+      ServiceProvider provider, void Function(bool isSuccess, String message) callback) async {
     final d = dio.Dio();
+    
+    // 构建模型列表URL
+    String modelListUrl;
+    if (provider == ServiceProvider.custom_openai_compatible) {
+      // 自定义服务商，构建标准的OpenAI兼容模型列表URL
+      String cleanUrl = baseUrl;
+      
+      // 移除可能的chat/completions路径
+      cleanUrl = cleanUrl.replaceAll(RegExp(r'/v1/chat/completions$'), '');
+      cleanUrl = cleanUrl.replaceAll(RegExp(r'/chat/completions$'), '');
+      
+      // 确保以/v1结尾（如果还没有的话）
+      if (!cleanUrl.endsWith('/v1')) {
+        if (cleanUrl.endsWith('/')) {
+          cleanUrl = cleanUrl + 'v1';
+        } else {
+          cleanUrl = cleanUrl + '/v1';
+        }
+      }
+      
+      modelListUrl = cleanUrl + '/models';
+    } else {
+      // 使用预定义的模型列表URL
+      final providerData = ServiceProvider.providerData[provider];
+      modelListUrl = providerData?['modelListUrl'] ?? '';
+      if (modelListUrl.isEmpty) {
+        callback(false, '该服务商不支持自动获取模型列表');
+        return [];
+      }
+    }
+
     try {
-      final rs = await d!.post(
-        url,
+      final response = await d.get(
+        modelListUrl,
+        options: dio.Options(
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          },
+        ),
       );
+
+      if (response.statusCode == 200) {
+        final data = response.data;
+        List<String> models = [];
+        
+        if (data['data'] != null && data['data'] is List) {
+          for (var model in data['data']) {
+            if (model['id'] != null) {
+              models.add(model['id'].toString());
+            }
+          }
+        }
+        
+        if (models.isNotEmpty) {
+          callback(true, '成功获取到 ${models.length} 个模型');
+          return models;
+        } else {
+          callback(false, '未找到可用模型');
+          return [];
+        }
+      } else {
+        callback(false, 'HTTP错误: ${response.statusCode}');
+        return [];
+      }
     } on dio.DioException catch (e) {
+      String errorMessage;
       if (e.type == dio.DioExceptionType.connectionTimeout ||
           e.type == dio.DioExceptionType.receiveTimeout ||
-          e.type == dio.DioExceptionType.sendTimeout ||
-          e.type == dio.DioExceptionType.unknown) {
-        print('网络连接超时或无网络: ${e.message}');
-        callback(false, '网络连接超时或无网络: ${e.message}');
+          e.type == dio.DioExceptionType.sendTimeout) {
+        errorMessage = '网络连接超时，请检查网络连接';
+      } else if (e.type == dio.DioExceptionType.badResponse) {
+        if (e.response?.statusCode == 401) {
+          errorMessage = 'API Key无效或已过期';
+        } else if (e.response?.statusCode == 403) {
+          errorMessage = '访问被拒绝，请检查API权限';
+        } else {
+          errorMessage = 'API请求失败: ${e.response?.statusCode}';
+        }
+      } else {
+        errorMessage = '网络连接失败: ${e.message}';
       }
-      print('API连接失败: ${e.message}');
-      callback(false, 'API连接失败: ${e.message}');
+      print('获取模型列表失败: $errorMessage');
+      callback(false, errorMessage);
     } catch (e) {
       print('发生未知错误: $e');
       callback(false, '发生未知错误: $e');
